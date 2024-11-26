@@ -28,7 +28,7 @@ def send_telegram_message(chat_id, message, bot_token):
     }
     response = requests.post(url, json=payload)
     if response.status_code != 200:
-        print(f"[ERROR] Failed to send message: {response.text}")
+        return 0
     return response.json()
 
 
@@ -42,7 +42,11 @@ def get_queue_message_count():
         else:
             raise Exception(f"Failed to fetch RabbitMQ data: {response.status_code} {response.text}")
     except Exception as e:
-        print(f"[ERROR] {e}")
+        send_telegram_message(
+            TELEGRAM_CHAT_ID,
+            f"⚠️ Не удалось получить информацию о количестве сообщений в очереди!",
+            TELEGRAM_BOT_TOKEN
+        )
         return 0
 
 
@@ -53,11 +57,9 @@ def monitor_queue():
     while True:
         try:
             message_count = get_queue_message_count()
-            print(f"[INFO] Сообщений в очереди: {message_count}")
 
             if message_count > THRESHOLD:
                 consecutive_alerts += 1
-                print(f"[WARNING] Превышение порога ({consecutive_alerts}/3)")
             else:
                 consecutive_alerts = 0  # Сбрасываем счетчик, если меньше порога
 
@@ -72,7 +74,6 @@ def monitor_queue():
 
             time.sleep(CHECK_INTERVAL)  # Ждем перед следующей проверкой
         except Exception as e:
-            print(f"[ERROR] {e}")
             time.sleep(CHECK_INTERVAL)  # Подождать перед следующей попыткой
 
 
