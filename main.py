@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 load_dotenv('.env')
 
 # Конфигурация
-RABBITMQ_API = os.getenv("RABBIT_API")
+RABBIT_API_TO_REDIS = os.getenv("RABBIT_API_TO_REDIS")
+RABBITMQ_API_HTTP = os.getenv("RABBIT_API_HTTP")
 RABBITMQ_USER = os.getenv("RABBIT_USER")
 RABBITMQ_PASSWORD = os.getenv("RABBIT_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -32,10 +33,10 @@ def send_telegram_message(chat_id, message, bot_token):
     return response.json()
 
 
-def get_queue_message_count():
-    """Получает количество сообщений в очереди из RabbitMQ."""
+def get_queue_to_redis_message_count():
+    """Получает количество сообщений в очереди из RabbitMQ (to_redis)."""
     try:
-        response = requests.get(RABBITMQ_API, auth=(RABBITMQ_USER, RABBITMQ_PASSWORD))
+        response = requests.get(RABBIT_API_TO_REDIS, auth=(RABBITMQ_USER, RABBITMQ_PASSWORD))
         if response.status_code == 200:
             data = response.json()
             return data.get("messages", 0)
@@ -44,33 +45,69 @@ def get_queue_message_count():
     except Exception as e:
         send_telegram_message(
             TELEGRAM_CHAT_ID,
-            f"⚠️ Не удалось получить информацию о количестве сообщений в очереди!",
+            f"⚠️ Не удалось получить информацию о количестве сообщений в очереди to_redis!",
             TELEGRAM_BOT_TOKEN
         )
         return 0
 
 
-def monitor_queue():
-    """Мониторит очередь и отправляет уведомления, если сообщений слишком много."""
-    consecutive_alerts = 0
+def get_queue_http_message_count():
+    """Получает количество сообщений в очереди из RabbitMQ (http_post_queue)."""
+    try:
+        response = requests.get(RABBITMQ_API_HTTP, auth=(RABBITMQ_USER, RABBITMQ_PASSWORD))
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("messages", 0)
+        else:
+            raise Exception(f"Failed to fetch RabbitMQ data: {response.status_code} {response.text}")
+    except Exception as e:
+        send_telegram_message(
+            TELEGRAM_CHAT_ID,
+            f"⚠️ Не удалось получить информацию о количестве сообщений в очереди http_post_queue!",
+            TELEGRAM_BOT_TOKEN
+        )
+        return 0
+
+
+def monitor_queues():
+    """Мониторит обе очереди и отправляет уведомления, если сообщений слишком много в любой из них."""
+    consecutive_alerts_to_redis = 0
+    consecutive_alerts_http = 0
 
     while True:
         try:
-            message_count = get_queue_message_count()
+            # Получаем количество сообщений в обеих очередях
+            to_redis_message_count = get_queue_to_redis_message_count()
+            http_message_count = get_queue_http_message_count()
 
-            if message_count > THRESHOLD:
-                consecutive_alerts += 1
+            # Проверяем очередь to_redis
+            if to_redis_message_count > THRESHOLD:
+                consecutive_alerts_to_redis += 1
             else:
-                consecutive_alerts = 0  # Сбрасываем счетчик, если меньше порога
+                consecutive_alerts_to_redis = 0  # Сбрасываем счетчик, если меньше порога
 
-            if consecutive_alerts >= ALERT_THRESHOLD:
+            # Проверяем очередь http_post_queue
+            if http_message_count > THRESHOLD:
+                consecutive_alerts_http += 1
+            else:
+                consecutive_alerts_http = 0  # Сбрасываем счетчик, если меньше порога
+
+            # Если превышен порог для одной из очередей
+            if consecutive_alerts_to_redis >= ALERT_THRESHOLD:
                 send_telegram_message(
                     TELEGRAM_CHAT_ID,
-                    f"⚠️ В очереди `to_redis` {message_count} сообщений",
+                    f"⚠️ В очереди `to_redis` {to_redis_message_count} сообщений",
                     TELEGRAM_BOT_TOKEN
                 )
-                time.sleep(1800)
-                consecutive_alerts = 0  # Сброс после отправки уведомления
+                consecutive_alerts_to_redis = 0  # Сброс после отправки уведомления
+
+            if consecutive_alerts_http >= ALERT_THRESHOLD:
+                send_telegram_message(
+                    TELEGRAM_CHAT_ID,
+                    f"⚠️ В очереди `http_post_queue` {http_message_count} сообщений",
+                    TELEGRAM_BOT_TOKEN
+                )
+                consecutive_alerts_http = 0  # Сброс после отправки уведомления
 
             time.sleep(CHECK_INTERVAL)  # Ждем перед следующей проверкой
         except Exception as e:
@@ -78,4 +115,4 @@ def monitor_queue():
 
 
 if __name__ == "__main__":
-    monitor_queue()
+    monitor_queues()
